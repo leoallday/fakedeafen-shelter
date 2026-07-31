@@ -6,7 +6,7 @@ const {
 } = shelter;
 
 store.fakeDeafen ??= false;
-store.keybind ??= "Ctrl+Shift+D";
+store.keybind ??= "Ctrl+Shift+F";
 
 let socketStore = null;
 let currentSocket = null;
@@ -113,6 +113,8 @@ function onKeyDown(e) {
     e.altKey === kb.alt
   ) {
     e.preventDefault();
+    e.stopPropagation();
+    e.stopImmediatePropagation();
     setFake(!store.fakeDeafen);
   }
 }
@@ -122,11 +124,12 @@ const RECONNECT_EVENTS = ["READY", "RESUMED", "CONNECTION_OPEN", "VOICE_STATE_UP
 export function onLoad() {
   ensureWrapped();
   for (const t of RECONNECT_EVENTS) scoped.flux.subscribe(t, ensureWrapped);
-  document.addEventListener("keydown", onKeyDown);
+  // capture phase so Discord's own keybind handlers never also fire
+  document.addEventListener("keydown", onKeyDown, true);
 }
 
 export function onUnload() {
-  document.removeEventListener("keydown", onKeyDown);
+  document.removeEventListener("keydown", onKeyDown, true);
   if (currentSocket && currentSocket.send === patchedSend) {
     currentSocket.send = realSend;
   }
