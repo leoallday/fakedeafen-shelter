@@ -156,17 +156,42 @@ function restoreMessage(channelId, id) {
   try {
     msg.deleted = true;
     for (const a of msg.attachments || []) a.deleted = true;
-    const cache = storesFlat.MessageStore?.getMessages?.(channelId);
-    if (!cache) return;
+    const MS = storesFlat.MessageStore;
+    const cache = MS?.getMessages?.(channelId);
+    if (!cache) {
+      console.warn("[MessageLogger] no message cache for", channelId);
+      return;
+    }
+    let inserted = false;
     if (cache.has?.(id)) {
       cache.update?.(id, () => msg);
+      inserted = true;
     } else if (typeof cache.add === "function") {
       cache.add(msg);
-    } else if (typeof cache.set === "function") {
-      cache.set(id, msg);
+      inserted = true;
+    } else {
+      try {
+        cache.update(id, () => msg);
+        inserted = true;
+      } catch {}
     }
+    if (!inserted && typeof cache.set === "function") {
+      cache.set(id, msg);
+      inserted = true;
+    }
+    if (!inserted) {
+      console.warn(
+        "[MessageLogger] no insert method on cache:",
+        Object.getOwnPropertyNames(Object.getPrototypeOf(cache) ?? {})
+      );
+      return;
+    }
+    MS?.emitChange?.();
     dispatcher.dispatch({ type: "MESSAGE_UPDATE", message: { id, channel_id: channelId } });
-  } catch {}
+    console.log("[MessageLogger] restored", id, "in cache:", cache.has?.(id));
+  } catch (e) {
+    console.error("[MessageLogger] restore failed", e);
+  }
 }
 
 function forceDelete(id) {
@@ -228,21 +253,34 @@ function logEdit(channelId, guildId, msg) {
   });
 }
 
+let interceptedOnce = false;
 scoped.flux.intercept((dispatch) => {
+  if (dispatch.type === "MESSAGE_DELETE" || dispatch.type === "MESSAGE_DELETE_BULK") {
+    if (!interceptedOnce) {
+      interceptedOnce = true;
+      console.log("[MessageLogger] intercept active, keepInChat =", store.keepInChat);
+    }
+  }
   if (dispatch.type === "MESSAGE_DELETE") {
     if (dispatch.mlForced) return;
     if (logDelete(dispatch.channelId, dispatch.guildId, dispatch.id) && store.keepInChat) {
       addKept(dispatch.id, dispatch.channelId);
       keepLive(dispatch.channelId, dispatch.id);
+      return false;
     }
   } else if (dispatch.type === "MESSAGE_DELETE_BULK") {
     if (dispatch.mlForced) return;
+    let any = false;
     for (const id of dispatch.ids || []) {
-      if (logDelete(dispatch.channelId, dispatch.guildId, id) && store.keepInChat) {
-        addKept(id, dispatch.channelId);
-        keepLive(dispatch.channelId, id);
+      if (logDelete(dispatch.channelId, dispatch.guildId, id)) {
+        any = true;
+        if (store.keepInChat) {
+          addKept(id, dispatch.channelId);
+          keepLive(dispatch.channelId, id);
+        }
       }
     }
+    if (store.keepInChat && any) return false;
   } else if (dispatch.type === "MESSAGE_UPDATE") {
     logEdit(dispatch.channelId, dispatch.guildId, dispatch.message);
   }
