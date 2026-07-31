@@ -47,7 +47,10 @@ function getSocket() {
 }
 
 function patchedSend(op, data, ...args) {
-  if (op === 4 && store.fakeDeafen && data) data.self_deaf = true;
+  if (op === 4 && store.fakeDeafen && data) {
+    data.self_deaf = true;
+    data.self_mute = true;
+  }
   return patchedSend.__realSend.call(this, op, data, ...args);
 }
 
@@ -79,7 +82,7 @@ function sendVoiceStateUpdate() {
   socket.send(4, {
     guild_id: channel?.guild_id ?? null,
     channel_id: channelId,
-    self_mute: mute,
+    self_mute: store.fakeDeafen || mute,
     self_deaf: store.fakeDeafen || deaf,
     self_video: false,
     flags: 0,
