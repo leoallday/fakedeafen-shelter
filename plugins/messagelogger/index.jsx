@@ -22,6 +22,7 @@ store.mediaMaxMB ??= 100;
 store.keepInChat ??= true;
 store.kept ??= {};
 
+const pendingKeeps = new Map();
 let dbPromise = null;
 function idb() {
   if (!dbPromise) {
@@ -141,6 +142,33 @@ function addKept(id, channelId) {
   store.kept = kept;
 }
 
+function keepLive(channelId, id) {
+  const msg = storesFlat.MessageStore?.getMessage(channelId, id);
+  if (!msg) return;
+  pendingKeeps.set(id, msg);
+  setTimeout(() => restoreMessage(channelId, id), 0);
+}
+
+function restoreMessage(channelId, id) {
+  const msg = pendingKeeps.get(id);
+  pendingKeeps.delete(id);
+  if (!msg || !store.kept[id]) return;
+  try {
+    msg.deleted = true;
+    for (const a of msg.attachments || []) a.deleted = true;
+    const cache = storesFlat.MessageStore?.getMessages?.(channelId);
+    if (!cache) return;
+    if (cache.has?.(id)) {
+      cache.update?.(id, () => msg);
+    } else if (typeof cache.add === "function") {
+      cache.add(msg);
+    } else if (typeof cache.set === "function") {
+      cache.set(id, msg);
+    }
+    dispatcher.dispatch({ type: "MESSAGE_UPDATE", message: { id, channel_id: channelId } });
+  } catch {}
+}
+
 function forceDelete(id) {
   const channelId = store.kept[id];
   if (!channelId) return;
@@ -205,18 +233,16 @@ scoped.flux.intercept((dispatch) => {
     if (dispatch.mlForced) return;
     if (logDelete(dispatch.channelId, dispatch.guildId, dispatch.id) && store.keepInChat) {
       addKept(dispatch.id, dispatch.channelId);
-      return false;
+      keepLive(dispatch.channelId, dispatch.id);
     }
   } else if (dispatch.type === "MESSAGE_DELETE_BULK") {
     if (dispatch.mlForced) return;
-    let any = false;
     for (const id of dispatch.ids || []) {
-      if (logDelete(dispatch.channelId, dispatch.guildId, id)) {
-        any = true;
-        if (store.keepInChat) addKept(id, dispatch.channelId);
+      if (logDelete(dispatch.channelId, dispatch.guildId, id) && store.keepInChat) {
+        addKept(id, dispatch.channelId);
+        keepLive(dispatch.channelId, id);
       }
     }
-    if (store.keepInChat && any) return false;
   } else if (dispatch.type === "MESSAGE_UPDATE") {
     logEdit(dispatch.channelId, dispatch.guildId, dispatch.message);
   }
