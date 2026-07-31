@@ -1,4 +1,4 @@
-import { makeSocketWrap } from "../../common/socket-wrap.js";
+import { getSocket, makeSocketWrap } from "../../common/socket-wrap.js";
 
 const {
   flux: { storesFlat },
@@ -30,13 +30,26 @@ function patchedSend(op, data, ...args) {
 
 const { ensureWrapped, restore } = makeSocketWrap(storesFlat, patchedSend);
 
+let didBootReidentify = false;
+
+function forceFreshIdentify() {
+  const socket = getSocket(storesFlat);
+  if (!socket || !socket.sessionId || socket.send !== patchedSend) return false;
+  socket.sessionId = null;
+  socket.close();
+  return true;
+}
+
 const RECONNECT_EVENTS = ["READY", "RESUMED", "CONNECTION_OPEN"];
 
 export function onLoad() {
   ensureWrapped();
   for (const t of RECONNECT_EVENTS) scoped.flux.subscribe(t, ensureWrapped);
-  const poll = setInterval(ensureWrapped, 200);
-  setTimeout(() => clearInterval(poll), 10000);
+  const poll = setInterval(() => {
+    ensureWrapped();
+    if (!didBootReidentify && forceFreshIdentify()) didBootReidentify = true;
+  }, 300);
+  setTimeout(() => clearInterval(poll), 15000);
 }
 
 export function onUnload() {
@@ -51,6 +64,7 @@ export function settings() {
         value={store.platform}
         onChange={(e) => {
           store.platform = e.target.value;
+          forceFreshIdentify();
         }}
         style="background:var(--background-secondary);color:var(--text-normal);border:1px solid var(--background-modifier-accent);border-radius:4px;padding:6px 8px;"
       >
@@ -60,7 +74,7 @@ export function settings() {
       </select>
       <Divider />
       <p style="color:var(--text-muted);font-size:12px;">
-        Takes effect after a full Discord restart. We can't guarantee this won't get you warned or banned.
+        Applies immediately. We can't guarantee this won't get you warned or banned.
       </p>
     </div>
   );
