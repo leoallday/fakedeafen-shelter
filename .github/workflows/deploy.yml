@@ -1,0 +1,36 @@
+name: Build and deploy
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v2
+
+      - name: Setup Node
+        uses: actions/setup-node@v2
+        with:
+          node-version: 24
+
+      - name: Deps
+        run: |
+          npm install --global pnpm
+          pnpm i
+
+      - name: Build plugin(s)
+        run: pnpm lune ci
+
+      - name: Run SSG
+        run: |
+          cp -r static/* dist || true
+          pnpm lune ssg ci
+
+      - name: Deploy to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./dist

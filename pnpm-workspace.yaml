@@ -1,0 +1,6 @@
+packages:
+  - plugins/*
+
+allowBuilds:
+  esbuild: true
+  "@parcel/watcher": true
