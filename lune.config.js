@@ -5,5 +5,7 @@
 import { defineConfig } from "@uwu/lune";
 
 export default defineConfig({
-  // configure lune here
+  ssg: {
+    base_url: "https://leoallday.github.io/fakedeafen-shelter",
+  },
 });
