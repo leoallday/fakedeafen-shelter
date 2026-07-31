@@ -1,5 +1,5 @@
 const {
-  flux: { storesFlat },
+  flux: { storesFlat, dispatcher },
   plugin: { scoped, store },
   solid: { createSignal, createEffect, onCleanup, For, Show },
   ui: { Header, HeaderTags, Text, TextTags, TextBox, Button, ButtonColors, ButtonSizes, ButtonLooks, Divider, SwitchItem, Slider },
@@ -10,6 +10,7 @@ const MAX_CONTENT = 1000;
 const MAX_EDITS = 20;
 const MAX_EDIT_TRACKS = 500;
 const MAX_ATTACHMENT_BYTES = 50 * 1024 * 1024;
+const MAX_KEPT = 500;
 const EPHEMERAL = 64;
 
 store.logs ??= [];
@@ -18,6 +19,8 @@ store.ignoreBots ??= false;
 store.ignoreSelf ??= false;
 store.cacheMedia ??= true;
 store.mediaMaxMB ??= 100;
+store.keepInChat ??= true;
+store.kept ??= {};
 
 let dbPromise = null;
 function idb() {
@@ -130,6 +133,23 @@ function pushLog(entry) {
   if (entry.type === "delete") cacheMedia(entry.attachments);
 }
 
+function addKept(id, channelId) {
+  if (store.kept[id]) return;
+  const kept = { ...store.kept, [id]: channelId };
+  const keys = Object.keys(kept);
+  if (keys.length > MAX_KEPT) delete kept[keys[0]];
+  store.kept = kept;
+}
+
+function forceDelete(id) {
+  const channelId = store.kept[id];
+  if (!channelId) return;
+  const kept = { ...store.kept };
+  delete kept[id];
+  store.kept = kept;
+  dispatcher.dispatch({ type: "MESSAGE_DELETE", channelId, id, mlForced: true });
+}
+
 function logDelete(channelId, guildId, id) {
   const entry = serializeMessage(channelId, guildId, id);
   if (!entry) return;
@@ -182,12 +202,78 @@ function logEdit(channelId, guildId, msg) {
 
 scoped.flux.intercept((dispatch) => {
   if (dispatch.type === "MESSAGE_DELETE") {
-    logDelete(dispatch.channelId, dispatch.guildId, dispatch.id);
+    if (dispatch.mlForced) return;
+    if (logDelete(dispatch.channelId, dispatch.guildId, dispatch.id) && store.keepInChat) {
+      addKept(dispatch.id, dispatch.channelId);
+      return false;
+    }
   } else if (dispatch.type === "MESSAGE_DELETE_BULK") {
-    for (const id of dispatch.ids || []) logDelete(dispatch.channelId, dispatch.guildId, id);
+    if (dispatch.mlForced) return;
+    let any = false;
+    for (const id of dispatch.ids || []) {
+      if (logDelete(dispatch.channelId, dispatch.guildId, id)) {
+        any = true;
+        if (store.keepInChat) addKept(id, dispatch.channelId);
+      }
+    }
+    if (store.keepInChat && any) return false;
   } else if (dispatch.type === "MESSAGE_UPDATE") {
     logEdit(dispatch.channelId, dispatch.guildId, dispatch.message);
   }
+});
+
+scoped.ui.injectCss(`
+  .ml-kept-deleted {
+    background-color: rgba(240, 71, 71, 0.15);
+    border-radius: 8px;
+  }
+  .ml-kept-deleted div {
+    color: #f04747;
+  }
+  .ml-kept-deleted img,
+  .ml-kept-deleted video {
+    filter: grayscale(1);
+  }
+`);
+
+function addDeleteToMenu(menu, id) {
+  if (menu.querySelector(".ml-delete-item")) return;
+  const template = menu.querySelector('[role="menuitem"]');
+  if (!template) return;
+  const item = template.cloneNode(true);
+  item.classList.add("ml-delete-item");
+  const icon = item.querySelector('[class*="menuItemIcon"]');
+  if (icon) icon.textContent = "";
+  const label = item.querySelector('[class*="menuItemLabel"]') ?? item;
+  label.textContent = "Delete from logs";
+  label.style.color = "#f04747";
+  item.onclick = (e) => {
+    e.stopPropagation();
+    forceDelete(id);
+    dispatcher.dispatch({ type: "CONTEXT_MENU_CLOSE" });
+  };
+  menu.appendChild(item);
+}
+
+scoped.observeDom('[id^="chat-messages-"]', (el) => {
+  const parts = el.id.split("-");
+  if (parts.length < 4) return;
+  const id = parts[parts.length - 1];
+  if (!store.kept[id]) return;
+  el.classList.add("ml-kept-deleted");
+  if (el.dataset.mlCm) return;
+  el.dataset.mlCm = 1;
+  el.addEventListener("contextmenu", () => {
+    if (!store.kept[id]) return;
+    const timer = setInterval(() => {
+      const menu = document.querySelector('[role="menu"]');
+      if (menu) {
+        clearInterval(timer);
+        addDeleteToMenu(menu, id);
+      }
+    }, 20);
+    setTimeout(() => clearInterval(timer), 1000);
+  });
 });
 
 function fmtTime(iso) {
@@ -246,12 +332,18 @@ function Media({ a }) {
 function removeLog(id) {
   const entry = store.logs.find((l) => l.id === id);
   store.logs = store.logs.filter((l) => l.id !== id);
+  if (entry?.type === "delete") forceDelete(id);
   if (entry) for (const a of entry.attachments || []) idbDelete(a.id).catch(() => {});
 }
 
 function clearAll() {
+  const kept = store.kept;
   store.logs = [];
   store.edits = {};
+  store.kept = {};
+  for (const [id, channelId] of Object.entries(kept)) {
+    dispatcher.dispatch({ type: "MESSAGE_DELETE", channelId, id, mlForced: true });
+  }
   idbClear().catch(() => {});
 }
 
@@ -274,6 +366,12 @@ export function settings() {
       <SwitchItem checked={store.ignoreSelf} onChange={(v) => (store.ignoreSelf = v)}>
         Ignore my own messages
       </SwitchItem>
+      <SwitchItem checked={store.keepInChat} onChange={(v) => (store.keepInChat = v)}>
+        Keep deleted messages in chat (red)
+      </SwitchItem>
+      <Text tag={TextTags.textSM} style="color:var(--text-muted);">
+        Deleting an entry in the log below also removes it from chat.
+      </Text>
       <SwitchItem checked={store.cacheMedia} onChange={(v) => (store.cacheMedia = v)}>
         Cache attachments locally
       </SwitchItem>
