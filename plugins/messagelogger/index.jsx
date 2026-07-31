@@ -22,7 +22,6 @@ store.mediaMaxMB ??= 100;
 store.keepInChat ??= true;
 store.kept ??= {};
 
-const pendingKeeps = new Map();
 let dbPromise = null;
 
 console.log(
@@ -151,73 +150,6 @@ function addKept(id, channelId) {
   store.kept = kept;
 }
 
-function keepLive(channelId, id) {
-  const msg = storesFlat.MessageStore?.getMessage(channelId, id);
-  if (!msg) {
-    console.warn("[MessageLogger] keepLive: message not in store, nothing to keep", id);
-    return;
-  }
-  pendingKeeps.set(id, msg);
-  setTimeout(() => restoreMessage(channelId, id), 0);
-  setTimeout(() => {
-    if (!storesFlat.MessageStore?.getMessage(channelId, id))
-      console.error("[MessageLogger] message gone from store after keep!", id);
-  }, 500);
-}
-
-function restoreMessage(channelId, id) {
-  const msg = pendingKeeps.get(id);
-  pendingKeeps.delete(id);
-  if (!msg || !store.kept[id]) return;
-  try {
-    msg.deleted = true;
-    for (const a of msg.attachments || []) a.deleted = true;
-    const MS = storesFlat.MessageStore;
-    const cache = MS?.getMessages?.(channelId);
-    if (!cache) {
-      console.warn("[MessageLogger] no message cache for", channelId);
-      return;
-    }
-    console.log("[MessageLogger] restore", id, "already in cache:", !!cache.has?.(id));
-    let inserted = false;
-    if (cache.has?.(id)) {
-      cache.update?.(id, () => msg);
-      inserted = true;
-    } else if (typeof cache.add === "function") {
-      cache.add(msg);
-      inserted = true;
-    } else {
-      try {
-        cache.update(id, () => msg);
-        inserted = true;
-      } catch {}
-    }
-    if (!inserted && typeof cache.set === "function") {
-      cache.set(id, msg);
-      inserted = true;
-    }
-    if (!inserted) {
-      console.warn(
-        "[MessageLogger] no insert method on cache:",
-        Object.getOwnPropertyNames(Object.getPrototypeOf(cache) ?? {})
-      );
-      return;
-    }
-    console.log("[MessageLogger] restored", id, "in cache:", cache.has?.(id));
-    cache.emitChange?.();
-    MS?.emitChange?.();
-    dispatcher.dispatch({ type: "MESSAGE_UPDATE", channelId, message: msg });
-    setTimeout(() => {
-      const row = document.querySelector(`[id^="chat-messages-${id}-"]`);
-      console.log(
-        "[MessageLogger] row in DOM after 1s:", !!row,
-        "| in store:", !!MS?.getMessage(channelId, id)
-      );
-    }, 1000);
-  } catch (e) {
-    console.error("[MessageLogger] restore failed", e);
-  }
-}
 function forceDelete(id) {
   const channelId = store.kept[id];
   if (!channelId) return;
@@ -277,6 +209,23 @@ function logEdit(channelId, guildId, msg) {
   });
 }
 
+function markKeptRow(id, el) {
+  el.classList.add("ml-kept-deleted");
+  if (el.dataset.mlCm) return;
+  el.dataset.mlCm = 1;
+  el.addEventListener("contextmenu", () => {
+    if (!store.kept[id]) return;
+    const timer = setInterval(() => {
+      const menu = document.querySelector('[role="menu"]');
+      if (menu) {
+        clearInterval(timer);
+        addDeleteToMenu(menu, id);
+      }
+    }, 20);
+    setTimeout(() => clearInterval(timer), 1000);
+  });
+}
+
 let interceptedOnce = false;
 scoped.flux.intercept((dispatch) => {
   if (dispatch.type === "MESSAGE_DELETE" || dispatch.type === "MESSAGE_DELETE_BULK") {
@@ -292,7 +241,8 @@ scoped.flux.intercept((dispatch) => {
     logDelete(dispatch.channelId, dispatch.guildId, dispatch.id);
     if (store.keepInChat && msg) {
       addKept(dispatch.id, dispatch.channelId);
-      keepLive(dispatch.channelId, dispatch.id);
+      const row = document.querySelector(`[id^="chat-messages-${dispatch.id}-"]`);
+      if (row) markKeptRow(dispatch.id, row);
       return false;
     }
   } else if (dispatch.type === "MESSAGE_DELETE_BULK") {
@@ -304,7 +254,8 @@ scoped.flux.intercept((dispatch) => {
       if (store.keepInChat && m) {
         any = true;
         addKept(id, dispatch.channelId);
-        keepLive(dispatch.channelId, id);
+        const row = document.querySelector(`[id^="chat-messages-${id}-"]`);
+        if (row) markKeptRow(id, row);
       }
     }
     if (store.keepInChat && any) return false;
@@ -350,21 +301,7 @@ scoped.observeDom('[id^="chat-messages-"]', (el) => {
   const parts = el.id.split("-");
   if (parts.length < 4) return;
   const id = parts[parts.length - 1];
-  if (!store.kept[id]) return;
-  el.classList.add("ml-kept-deleted");
-  if (el.dataset.mlCm) return;
-  el.dataset.mlCm = 1;
-  el.addEventListener("contextmenu", () => {
-    if (!store.kept[id]) return;
-    const timer = setInterval(() => {
-      const menu = document.querySelector('[role="menu"]');
-      if (menu) {
-        clearInterval(timer);
-        addDeleteToMenu(menu, id);
-      }
-    }, 20);
-    setTimeout(() => clearInterval(timer), 1000);
-  });
+  if (store.kept[id]) markKeptRow(id, el);
 });
 
 function fmtTime(iso) {
