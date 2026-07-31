@@ -58,7 +58,9 @@ function getSocket() {
 function patchedSend(op, data, ...args) {
   if (op === 2 && data?.properties) {
     const browser = PLATFORMS[store.platform];
-    if (browser) data.properties.browser = browser;
+    if (browser) {
+      data = { ...data, properties: { ...data.properties, browser } };
+    }
   }
   return realSend.call(this, op, data, ...args);
 }
