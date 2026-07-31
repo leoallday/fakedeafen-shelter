@@ -18,7 +18,6 @@ store.platform ??= "desktop";
 
 let socketStore = null;
 let currentSocket = null;
-let realSend = null;
 
 function hasGetSocket(s) {
   return s && typeof s.getSocket === "function";
@@ -62,13 +61,16 @@ function patchedSend(op, data, ...args) {
       data = { ...data, properties: { ...data.properties, browser } };
     }
   }
-  return realSend.call(this, op, data, ...args);
+  return patchedSend.__realSend.call(this, op, data, ...args);
 }
 
 function ensureWrapped() {
   const socket = getSocket();
   if (!socket || socket.send === patchedSend) return;
-  realSend = socket.send;
+  for (let f = socket.send; f; f = f.__realSend) {
+    if (f === patchedSend) return;
+  }
+  patchedSend.__realSend = socket.send;
   socket.send = patchedSend;
   currentSocket = socket;
 }
@@ -82,7 +84,7 @@ export function onLoad() {
 
 export function onUnload() {
   if (currentSocket && currentSocket.send === patchedSend) {
-    currentSocket.send = realSend;
+    currentSocket.send = patchedSend.__realSend;
   }
   currentSocket = null;
 }
