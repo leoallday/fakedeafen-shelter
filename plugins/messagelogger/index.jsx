@@ -178,6 +178,7 @@ function restoreMessage(channelId, id) {
       console.warn("[MessageLogger] no message cache for", channelId);
       return;
     }
+    console.log("[MessageLogger] restore", id, "already in cache:", !!cache.has?.(id));
     let inserted = false;
     if (cache.has?.(id)) {
       cache.update?.(id, () => msg);
@@ -202,9 +203,17 @@ function restoreMessage(channelId, id) {
       );
       return;
     }
-    MS?.emitChange?.();
-    dispatcher.dispatch({ type: "MESSAGE_UPDATE", message: { id, channel_id: channelId } });
     console.log("[MessageLogger] restored", id, "in cache:", cache.has?.(id));
+    cache.emitChange?.();
+    MS?.emitChange?.();
+    dispatcher.dispatch({ type: "MESSAGE_UPDATE", channelId, message: msg });
+    setTimeout(() => {
+      const row = document.querySelector(`[id^="chat-messages-${id}-"]`);
+      console.log(
+        "[MessageLogger] row in DOM after 1s:", !!row,
+        "| in store:", !!MS?.getMessage(channelId, id)
+      );
+    }, 1000);
   } catch (e) {
     console.error("[MessageLogger] restore failed", e);
   }
