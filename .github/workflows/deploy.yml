@@ -38,9 +38,7 @@ jobs:
         run: pnpm lune ci
 
       - name: Run SSG
-        run: |
-          cp -r static/* dist || true
-          pnpm lune ssg ci
+        run: pnpm lune ssg ci
 
       - name: Setup Pages
         uses: actions/configure-pages@v5

@@ -1,3 +1,5 @@
+import { makeSocketWrap } from "../../common/socket-wrap.js";
+
 const {
   flux: { storesFlat },
   plugin: { scoped, store },
@@ -16,44 +18,6 @@ const PLATFORMS = {
 
 store.platform ??= "desktop";
 
-let socketStore = null;
-let currentSocket = null;
-
-function hasGetSocket(s) {
-  return s && typeof s.getSocket === "function";
-}
-
-function findInWebpack() {
-  const chunk = window.webpackChunkdiscord_app;
-  if (!chunk) return null;
-  let cache = null;
-  try {
-    chunk.push([["__platformspoofer"], {}, (r) => (cache = r.c)]);
-    chunk.pop();
-  } catch {
-    return null;
-  }
-  if (!cache) return null;
-  for (const id in cache) {
-    const mod = cache[id];
-    if (hasGetSocket(mod?.exports)) return mod.exports;
-  }
-  return null;
-}
-
-function findSocketStore() {
-  if (socketStore) return socketStore;
-  socketStore =
-    (hasGetSocket(storesFlat["ConnectionStore"]) && storesFlat["ConnectionStore"]) ||
-    Object.values(storesFlat).find(hasGetSocket) ||
-    findInWebpack();
-  return socketStore;
-}
-
-function getSocket() {
-  return findSocketStore()?.getSocket() ?? null;
-}
-
 function patchedSend(op, data, ...args) {
   if (op === 2 && data?.properties) {
     const browser = PLATFORMS[store.platform];
@@ -64,16 +28,7 @@ function patchedSend(op, data, ...args) {
   return patchedSend.__realSend.call(this, op, data, ...args);
 }
 
-function ensureWrapped() {
-  const socket = getSocket();
-  if (!socket || socket.send === patchedSend) return;
-  for (let f = socket.send; f; f = f.__realSend) {
-    if (f === patchedSend) return;
-  }
-  patchedSend.__realSend = socket.send;
-  socket.send = patchedSend;
-  currentSocket = socket;
-}
+const { ensureWrapped, restore } = makeSocketWrap(storesFlat, patchedSend);
 
 const RECONNECT_EVENTS = ["READY", "RESUMED", "CONNECTION_OPEN"];
 
@@ -83,10 +38,7 @@ export function onLoad() {
 }
 
 export function onUnload() {
-  if (currentSocket && currentSocket.send === patchedSend) {
-    currentSocket.send = patchedSend.__realSend;
-  }
-  currentSocket = null;
+  restore();
 }
 
 export function settings() {

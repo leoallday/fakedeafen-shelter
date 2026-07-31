@@ -1,7 +1,6 @@
 {
   "devDependencies": {
-    "@uwu/lune": "^1.6.2",
-    "@uwu/shelter-defs": "^1.4.1"
+    "@uwu/lune": "^1.6.2"
   },
   "type": "module",
   "workspaces": ["plugins/*"]

@@ -1,3 +1,5 @@
+import { getSocket, makeSocketWrap } from "../../common/socket-wrap.js";
+
 const {
   flux: { storesFlat },
   plugin: { scoped, store },
@@ -8,44 +10,6 @@ const {
 store.fakeDeafen ??= false;
 store.keybind ??= "Ctrl+Shift+F";
 
-let socketStore = null;
-let currentSocket = null;
-
-function hasGetSocket(s) {
-  return s && typeof s.getSocket === "function";
-}
-
-function findInWebpack() {
-  const chunk = window.webpackChunkdiscord_app;
-  if (!chunk) return null;
-  let cache = null;
-  try {
-    chunk.push([["__fakedeafen"], {}, (r) => (cache = r.c)]);
-    chunk.pop();
-  } catch {
-    return null;
-  }
-  if (!cache) return null;
-  for (const id in cache) {
-    const mod = cache[id];
-    if (hasGetSocket(mod?.exports)) return mod.exports;
-  }
-  return null;
-}
-
-function findSocketStore() {
-  if (socketStore) return socketStore;
-  socketStore =
-    (hasGetSocket(storesFlat["ConnectionStore"]) && storesFlat["ConnectionStore"]) ||
-    Object.values(storesFlat).find(hasGetSocket) ||
-    findInWebpack();
-  return socketStore;
-}
-
-function getSocket() {
-  return findSocketStore()?.getSocket() ?? null;
-}
-
 function patchedSend(op, data, ...args) {
   if (op === 4 && store.fakeDeafen && data) {
     data.self_deaf = true;
@@ -54,36 +18,19 @@ function patchedSend(op, data, ...args) {
   return patchedSend.__realSend.call(this, op, data, ...args);
 }
 
-function ensureWrapped() {
-  const socket = getSocket();
-  if (!socket || socket.send === patchedSend) return;
-  for (let f = socket.send; f; f = f.__realSend) {
-    if (f === patchedSend) return;
-  }
-  patchedSend.__realSend = socket.send;
-  socket.send = patchedSend;
-  currentSocket = socket;
-}
+const { ensureWrapped, restore } = makeSocketWrap(storesFlat, patchedSend);
 
-function realMuteDeaf() {
-  const me = storesFlat["MediaEngineStore"];
-  return { mute: !!me?.isMute(), deaf: !!me?.isDeaf() };
-}
-
-// op 4 = VOICE_STATE_UPDATE; the gateway uses this to broadcast your
-// mute/deafen state to everyone in the channel, but it does NOT touch the
-// local media engine, so your own audio keeps flowing.
 function sendVoiceStateUpdate() {
-  const socket = getSocket();
+  const socket = getSocket(storesFlat);
   const channelId = storesFlat["SelectedChannelStore"]?.getVoiceChannelId();
   if (!socket || !channelId) return;
   const channel = storesFlat["ChannelStore"]?.getChannel(channelId);
-  const { mute, deaf } = realMuteDeaf();
+  const me = storesFlat["MediaEngineStore"];
   socket.send(4, {
     guild_id: channel?.guild_id ?? null,
     channel_id: channelId,
-    self_mute: store.fakeDeafen || mute,
-    self_deaf: store.fakeDeafen || deaf,
+    self_mute: store.fakeDeafen || !!me?.isMute(),
+    self_deaf: store.fakeDeafen || !!me?.isDeaf(),
     self_video: false,
     flags: 0,
   });
@@ -129,16 +76,12 @@ const RECONNECT_EVENTS = ["READY", "RESUMED", "CONNECTION_OPEN", "VOICE_STATE_UP
 export function onLoad() {
   ensureWrapped();
   for (const t of RECONNECT_EVENTS) scoped.flux.subscribe(t, ensureWrapped);
-  // capture phase so Discord's own keybind handlers never also fire
   document.addEventListener("keydown", onKeyDown, true);
 }
 
 export function onUnload() {
   document.removeEventListener("keydown", onKeyDown, true);
-  if (currentSocket && currentSocket.send === patchedSend) {
-    currentSocket.send = patchedSend.__realSend;
-  }
-  currentSocket = null;
+  restore();
   if (store.fakeDeafen) {
     store.fakeDeafen = false;
     sendVoiceStateUpdate();
