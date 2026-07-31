@@ -24,6 +24,15 @@ store.kept ??= {};
 
 const pendingKeeps = new Map();
 let dbPromise = null;
+
+console.log(
+  "[MessageLogger] startup; MessageStore =",
+  !!storesFlat.MessageStore,
+  "| getMessage =",
+  typeof storesFlat.MessageStore?.getMessage,
+  "| getMessages =",
+  typeof storesFlat.MessageStore?.getMessages
+);
 function idb() {
   if (!dbPromise) {
     dbPromise = new Promise((resolve, reject) => {
@@ -144,9 +153,16 @@ function addKept(id, channelId) {
 
 function keepLive(channelId, id) {
   const msg = storesFlat.MessageStore?.getMessage(channelId, id);
-  if (!msg) return;
+  if (!msg) {
+    console.warn("[MessageLogger] keepLive: message not in store, nothing to keep", id);
+    return;
+  }
   pendingKeeps.set(id, msg);
   setTimeout(() => restoreMessage(channelId, id), 0);
+  setTimeout(() => {
+    if (!storesFlat.MessageStore?.getMessage(channelId, id))
+      console.error("[MessageLogger] message gone from store after keep!", id);
+  }, 500);
 }
 
 function restoreMessage(channelId, id) {
@@ -193,7 +209,6 @@ function restoreMessage(channelId, id) {
     console.error("[MessageLogger] restore failed", e);
   }
 }
-
 function forceDelete(id) {
   const channelId = store.kept[id];
   if (!channelId) return;
@@ -263,7 +278,10 @@ scoped.flux.intercept((dispatch) => {
   }
   if (dispatch.type === "MESSAGE_DELETE") {
     if (dispatch.mlForced) return;
-    if (logDelete(dispatch.channelId, dispatch.guildId, dispatch.id) && store.keepInChat) {
+    const msg = storesFlat.MessageStore?.getMessage(dispatch.channelId, dispatch.id);
+    console.log("[MessageLogger] MESSAGE_DELETE", dispatch.id, "found in store:", !!msg);
+    logDelete(dispatch.channelId, dispatch.guildId, dispatch.id);
+    if (store.keepInChat && msg) {
       addKept(dispatch.id, dispatch.channelId);
       keepLive(dispatch.channelId, dispatch.id);
       return false;
@@ -272,12 +290,12 @@ scoped.flux.intercept((dispatch) => {
     if (dispatch.mlForced) return;
     let any = false;
     for (const id of dispatch.ids || []) {
-      if (logDelete(dispatch.channelId, dispatch.guildId, id)) {
+      const m = storesFlat.MessageStore?.getMessage(dispatch.channelId, id);
+      logDelete(dispatch.channelId, dispatch.guildId, id);
+      if (store.keepInChat && m) {
         any = true;
-        if (store.keepInChat) {
-          addKept(id, dispatch.channelId);
-          keepLive(dispatch.channelId, id);
-        }
+        addKept(id, dispatch.channelId);
+        keepLive(dispatch.channelId, id);
       }
     }
     if (store.keepInChat && any) return false;
