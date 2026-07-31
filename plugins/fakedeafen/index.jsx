@@ -76,6 +76,8 @@ const RECONNECT_EVENTS = ["READY", "RESUMED", "CONNECTION_OPEN", "VOICE_STATE_UP
 export function onLoad() {
   ensureWrapped();
   for (const t of RECONNECT_EVENTS) scoped.flux.subscribe(t, ensureWrapped);
+  const poll = setInterval(ensureWrapped, 200);
+  setTimeout(() => clearInterval(poll), 10000);
   document.addEventListener("keydown", onKeyDown, true);
 }
 

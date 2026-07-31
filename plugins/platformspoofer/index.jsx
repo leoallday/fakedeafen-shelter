@@ -35,6 +35,8 @@ const RECONNECT_EVENTS = ["READY", "RESUMED", "CONNECTION_OPEN"];
 export function onLoad() {
   ensureWrapped();
   for (const t of RECONNECT_EVENTS) scoped.flux.subscribe(t, ensureWrapped);
+  const poll = setInterval(ensureWrapped, 200);
+  setTimeout(() => clearInterval(poll), 10000);
 }
 
 export function onUnload() {
@@ -58,7 +60,7 @@ export function settings() {
       </select>
       <Divider />
       <p style="color:var(--text-muted);font-size:12px;">
-        Takes effect on your next reconnect. We can't guarantee this won't get you warned or banned.
+        Takes effect after a full Discord restart. We can't guarantee this won't get you warned or banned.
       </p>
     </div>
   );
